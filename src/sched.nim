@@ -5,13 +5,14 @@ import rlocks
 import heapqueue
 import times
 import os
+import posix
 
 type
     scheduler*[TArg] = object
         L: RLock
         thr:seq[Thread[TArg]]
-        timefunc:proc():float
-        delayfunc:proc(a:float)
+        timefunc:proc():Natural
+        delayfunc:proc(a:Natural)
         queue:HeapQueue[Event[TArg]]
     Event[TArg] = object
         time:Natural
@@ -25,6 +26,7 @@ proc `<=`(s, o:Event):bool = (s.time, s.priority) <= (o.time, o.priority)
 proc `>`(s, o:Event):bool = (s.time, s.priority) > (o.time, o.priority)
 proc `>=`(s, o:Event):bool = (s.time, s.priority) >= (o.time, o.priority)
 
+proc newHeapQueue*[T](): HeapQueue[T] {.inline.} = newSeq[T]().HeapQueue
 
 proc enterabs*[TArg](self:var scheduler[TArg], time:Natural, priority:Natural, action:proc(a:TArg),args:TArg):auto =
     ##[Enter a new event in the queue at an absolute time.
@@ -42,9 +44,11 @@ proc enter*[TArg](self:var scheduler[TArg], delay:Natural, priority:Natural, act
     ##[A variant that specifies the time as a relative time.
     This is actually the more commonly used interface.
     ]##
-    let time = self.timefunc() + cast[float](delay)
-    # let act = proc(a:TArg)
-    result = self.enterabs(cast[Natural](time), priority, action,args) #, argument, kwargs)
+    if self.queue.len == 0:
+        self.queue = newHeapQueue[Event[TArg]]()
+        
+    let time = self.timefunc() + delay
+    result = self.enterabs(time, priority, action,args) #, argument, kwargs)
 
 proc cancel*[TArg](self:var scheduler[TArg], event:Event) =
     ##[Remove an event from the queue.
@@ -58,7 +62,13 @@ proc cancel*[TArg](self:var scheduler[TArg], event:Event) =
 proc empty*[TArg](self:var scheduler[TArg]):bool=
     ##[Check whether the queue is empty.]##
     withRLock(self.L):
-        return not self.queue
+        return self.queue.len == 0
+
+proc toSortedSeq[T](h: HeapQueue[T]): seq[T] =
+    var tmp = h
+    result = @[]
+    while tmp.len > 0:
+        result.add(pop(tmp))
 
 proc run*[TArg](self:var scheduler[TArg] , blocking=true)=
     ##[Execute events until the queue is empty.
@@ -82,64 +92,53 @@ proc run*[TArg](self:var scheduler[TArg] , blocking=true)=
     ]##
     # localize variable access to minimize overhead
     # and to improve thread safety
-    let lock = self.L
     let q = self.queue
     let delayfunc = self.delayfunc
     let timefunc = self.timefunc
     var 
         delay:bool
-        time:float
-        m_now:float
+        time:Natural
+        first:Event[TArg]
     # pop = heapq.heappop
     while true:
-        withRLock(self.L):
-            # if not q:
-            #     break
-            # time, priority, action, argument, kwargs = q[0]
-            m_now = timefunc()
-            if time > m_now:
-                delay = true
-            else:
-                delay = false
-                discard self.queue.pop()
+        acquire(self.L)
+        if q.len == 0:
+            break
+        # time, priority, action, argument, kwargs = q[0]
+        first = self.queue.toSortedSeq()[0]
+        time = timefunc()
+        if first.time > time:
+            delay = true
+            echo "delay"
+        else:
+            echo "no delay"
+            delay = false
+            discard self.queue.pop()
         if delay:
             if not blocking:
-                break
-                # return time - m_now
-            delayfunc(time - m_now)
+                discard
+                # return time - time
+            delayfunc(first.time - time)
         else:
-            # action(*argument, **kwargs)
+            first.action(first.args)
             delayfunc(0)   # Let other threads run
-
-proc queue[TArg](self:var scheduler[TArg] ):HeapQueue[Event[TArg]]=
-    ##[An ordered list of upcoming events.
-    Events are named tuples with fields for:
-        time, priority, action, arguments, kwargs
-    ]##
-    # Use heapq to sort the queue rather than using 'sorted(self._queue)'.
-    # With heapq, two events scheduled at the same time will show in
-    # the actual order they would be retrieved.
-    withRLock(self.L):
-        result = self.queue
-    # return list(map(heapq.heappop, [events]*len(events)))
+        release(self.L)
 
 when isMainModule:
-    var delay = proc(a:float) = sleep( cast[int](a) )
-    var s = scheduler[string](timefunc:epochTime, delayfunc:delay)
+    # nim c --threads:on -r src/sched.nim 
+    var delay = proc(a:Natural) =  sleep( a * 1000)
+    var timefunc = proc():Natural= epochTime().toInt()
+    var s = scheduler[string](timefunc:timefunc, delayfunc:delay)
+    s.L = RLock()
+    initRLock(s.L)
     proc print_time(a="default") =
-        echo "From print_time", epochTime()
+        echo "From print_time",a, epochTime()
 
     proc print_some_times() =
         echo epochTime()
-        discard s.enter(delay:10, 1, print_time,"a")
-        # discard s.enter(5, 2, print_time)#, argument=("positional",))
-        # discard s.enter(5, 1, print_time)#, kwargs={'a': "keyword"})
+        discard s.enter(10, 1, print_time,"a")
+        discard s.enter(5, 2, print_time,"b")
         s.run()
         echo epochTime()
 
     print_some_times()
-# 930343690.257
-# From print_time 930343695.274 positional
-# From print_time 930343695.275 keyword
-# From print_time 930343700.273 default
-# 930343700.276
