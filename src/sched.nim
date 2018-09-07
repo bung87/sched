@@ -5,7 +5,7 @@ import rlocks
 import heapqueue
 import times
 import os
-import posix
+# import posix
 
 type
     scheduler*[TArg] = object
@@ -109,9 +109,7 @@ proc run*[TArg](self:var scheduler[TArg] , blocking=true)=
         time = timefunc()
         if first.time > time:
             delay = true
-            echo "delay"
         else:
-            echo "no delay"
             delay = false
             discard self.queue.pop()
         if delay:
