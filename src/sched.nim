@@ -5,10 +5,10 @@ import rlocks
 import heapqueue
 import times
 import os
-# import posix
+
 
 type
-    scheduler*[TArg] = object
+    Scheduler*[TArg] = object
         L: RLock
         thr:seq[Thread[TArg]]
         timefunc:proc():Natural
@@ -20,37 +20,41 @@ type
         action:proc(a:TArg)
         args:TArg
 
-proc `==`(s, o:Event):bool = (s.time, s.priority) == (o.time, o.priority)
-proc `<`(s, o:Event):bool = (s.time, s.priority) < (o.time, o.priority)
-proc `<=`(s, o:Event):bool = (s.time, s.priority) <= (o.time, o.priority)
-proc `>`(s, o:Event):bool = (s.time, s.priority) > (o.time, o.priority)
-proc `>=`(s, o:Event):bool = (s.time, s.priority) >= (o.time, o.priority)
+const
+    defaultDelayProc = proc(a:Natural) =  sleep( a * 1000 )
+    defaultTimeProc = proc():Natural= epochTime().toInt()
 
-proc newHeapQueue*[T](): HeapQueue[T] {.inline.} = newSeq[T]().HeapQueue
+proc initScheduler*[TArg](timefunc=defaultTimeProc, delayfunc=defaultDelayProc):Scheduler[TArg]  =
+    result.timefunc = timefunc
+    result.delayfunc = delayfunc
+    result.queue = newHeapQueue[Event[TArg]]()
+    result.L = RLock()
+    initRLock(result.L)
 
-proc enterabs*[TArg](self:var scheduler[TArg], time:Natural, priority:Natural, action:proc(a:TArg),args:TArg):auto =
+proc `==`*[T](s, o:Event[T]):bool = (s.time, s.priority) == (o.time, o.priority)
+proc `<`*[T](s, o:Event[T]):bool = (s.time, s.priority) < (o.time, o.priority)
+proc `<=`*[T](s, o:Event[T]):bool = (s.time, s.priority) <= (o.time, o.priority)
+proc `>`*[T](s, o:Event[T]):bool = (s.time, s.priority) > (o.time, o.priority)
+proc `>=`*[T](s, o:Event[T]):bool = (s.time, s.priority) >= (o.time, o.priority)
+
+proc enterabs*[TArg](self:var Scheduler[TArg], time:Natural, priority:Natural, action:proc(a:TArg),args:TArg):auto =
     ##[Enter a new event in the queue at an absolute time.
     Returns an ID for the event which can be used to remove it,
     if necessary.
     ]##
-    # if kwargs is _sentinel:
-    #     kwargs = {}
     result = Event[TArg](time:time,priority: priority,action: action,args:args) #, argument, kwargs)
     withRLock(self.L):
         self.queue.push( result)
     # return event # The ID
 
-proc enter*[TArg](self:var scheduler[TArg], delay:Natural, priority:Natural, action:proc(a:TArg),args:TArg):auto = #, argument=(), kwargs=_sentinel):
+proc enter*[TArg](self:var Scheduler[TArg], delay:Natural, priority:Natural, action:proc(a:TArg),args:TArg):auto = #, argument=(), kwargs=_sentinel):
     ##[A variant that specifies the time as a relative time.
     This is actually the more commonly used interface.
-    ]##
-    if self.queue.len == 0:
-        self.queue = newHeapQueue[Event[TArg]]()
-        
+    ]##        
     let time = self.timefunc() + delay
     result = self.enterabs(time, priority, action,args) #, argument, kwargs)
 
-proc cancel*[TArg](self:var scheduler[TArg], event:Event) =
+proc cancel*[TArg](self:var Scheduler[TArg], event:Event) =
     ##[Remove an event from the queue.
     This must be presented the ID as returned by enter().
     If the event is not in the queue, this raises ValueError.
@@ -59,18 +63,18 @@ proc cancel*[TArg](self:var scheduler[TArg], event:Event) =
         self.queue.del(event)
         # heapq.heapify(self.thr)
 
-proc empty*[TArg](self:var scheduler[TArg]):bool=
+proc empty*[TArg](self:var Scheduler[TArg]):bool=
     ##[Check whether the queue is empty.]##
     withRLock(self.L):
         return self.queue.len == 0
 
-proc toSortedSeq[T](h: HeapQueue[T]): seq[T] =
+proc toSortedSeq*[T](h: HeapQueue[T]): seq[T] =
     var tmp = h
     result = @[]
     while tmp.len > 0:
         result.add(pop(tmp))
 
-proc run*[TArg](self:var scheduler[TArg] , blocking=true)=
+proc run*[TArg](self:var Scheduler[TArg] , blocking=true)=
     ##[Execute events until the queue is empty.
     If blocking is False executes the scheduled events due to
     expire soonest (if any) and then return the deadline of the
@@ -120,23 +124,4 @@ proc run*[TArg](self:var scheduler[TArg] , blocking=true)=
         else:
             first.action(first.args)
             delayfunc(0)   # Let other threads run
-        release(self.L)
-
-when isMainModule:
-    # nim c --threads:on -r src/sched.nim 
-    var delay = proc(a:Natural) =  sleep( a * 1000)
-    var timefunc = proc():Natural= epochTime().toInt()
-    var s = scheduler[string](timefunc:timefunc, delayfunc:delay)
-    s.L = RLock()
-    initRLock(s.L)
-    proc print_time(a="default") =
-        echo "From print_time",a, epochTime()
-
-    proc print_some_times() =
-        echo epochTime()
-        discard s.enter(10, 1, print_time,"a")
-        discard s.enter(5, 2, print_time,"b")
-        s.run()
-        echo epochTime()
-
-    print_some_times()
+        release(self.L)   
