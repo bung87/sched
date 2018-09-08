@@ -21,10 +21,16 @@ proc print_some_times() =
     discard s.enter(10, 1, print_time,"a")
     discard s.enter(5, 2, print_time,"b")
     
-    s.run()
+    var r = s.run()
+    # try:
+    #     echo r.get()
+    #     assert(false)  # This will not be reached
+    # except UnpackError:  # Because an exception is raised
+    #     discard
     echo epochTime()
 
 print_some_times()
 
 discard s2.enter(5, 2, print_time2,MineData(a:"minedata"))
-s2.run()
+let r= s2.run()
+echo epochTime()

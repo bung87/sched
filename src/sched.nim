@@ -5,7 +5,7 @@ import rlocks
 import heapqueue
 import times
 import os
-
+import options
 
 type
     Scheduler*[TArg] = object
@@ -74,7 +74,7 @@ proc toSortedSeq*[T](h: HeapQueue[T]): seq[T] =
     while tmp.len > 0:
         result.add(pop(tmp))
 
-proc run*[TArg](self:var Scheduler[TArg] , blocking=true)=
+proc run*[TArg](self:var Scheduler[TArg] , blocking=true):Option[int]=
     ##[Execute events until the queue is empty.
     If blocking is False executes the scheduled events due to
     expire soonest (if any) and then return the deadline of the
@@ -116,12 +116,13 @@ proc run*[TArg](self:var Scheduler[TArg] , blocking=true)=
         else:
             delay = false
             discard self.queue.pop()
+        release(self.L)
         if delay:
             if not blocking:
-                discard
-                # return time - time
+                return some(first.time - time)
             delayfunc(first.time - time)
         else:
             first.action(first.args)
             delayfunc(0)   # Let other threads run
-        release(self.L)   
+        
+        # return none(int)
