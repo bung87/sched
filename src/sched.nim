@@ -10,20 +10,29 @@ import options
 type
     Scheduler*[TArg] = object
         L: RLock
-        thr:seq[Thread[TArg]]
+        
         timefunc:proc():Natural
         delayfunc:proc(a:Natural)
-        queue:HeapQueue[Event[TArg]]
+        
+        when TArg is void:
+            thr:seq[Thread[void]]
+            queue:HeapQueue[Event[void]]
+        else:
+            thr:seq[Thread[TArg]]
+            queue:HeapQueue[Event[TArg]]
     Event[TArg] = object
         time:Natural
         priority:Natural
-        action:proc(a:TArg)
-        args:TArg
+        when TArg is void:
+            action:proc()
+        else:
+            action:proc(a:TArg)
+            args:TArg
 
 const
     defaultDelayProc = proc(a:Natural) =  sleep( a * 1000 )
     defaultTimeProc = proc():Natural= epochTime().toInt()
-
+    
 proc initScheduler*[TArg](timefunc=defaultTimeProc, delayfunc=defaultDelayProc):Scheduler[TArg]  =
     result.timefunc = timefunc
     result.delayfunc = delayfunc
@@ -47,14 +56,30 @@ proc enterabs*[TArg](self:var Scheduler[TArg], time:Natural, priority:Natural, a
         self.queue.push( result)
     # return event # The ID
 
+proc enterabs*(self:var Scheduler[void], time:Natural, priority:Natural, action:proc()):auto =
+    ##[Enter a new event in the queue at an absolute time.
+    Returns an ID for the event which can be used to remove it,
+    if necessary.
+    ]##
+    result = Event[void](time:time,priority: priority,action: action) 
+    withRLock(self.L):
+        self.queue.push( result)
+        
 proc enter*[TArg](self:var Scheduler[TArg], delay:Natural, priority:Natural, action:proc(a:TArg),args:TArg):auto = #, argument=(), kwargs=_sentinel):
     ##[A variant that specifies the time as a relative time.
     This is actually the more commonly used interface.
     ]##        
     let time = self.timefunc() + delay
-    result = self.enterabs(time, priority, action,args) #, argument, kwargs)
+    result = self.enterabs(time, priority, action,args) #, argument, kwargs
 
-proc cancel*[TArg](self:var Scheduler[TArg], event:Event) =
+proc enter*(self:var Scheduler[void], delay:Natural, priority:Natural, action:proc()):auto = #, argument=(), kwargs=_sentinel):
+    ##[A variant that specifies the time as a relative time.
+    This is actually the more commonly used interface.
+    ]##        
+    let time = self.timefunc() + delay
+    result = self.enterabs(time, priority, action) #, argument, kwargs)
+
+proc cancel*[TArg](self:var Scheduler[TArg], event:Event[TArg]) =
     ##[Remove an event from the queue.
     This must be presented the ID as returned by enter().
     If the event is not in the queue, this raises ValueError.
@@ -122,7 +147,10 @@ proc run*[TArg](self:var Scheduler[TArg] , blocking=true):Option[int]=
                 return some(first.time - time)
             delayfunc(first.time - time)
         else:
-            first.action(first.args)
+            when TArg isnot void:
+                first.action(first.args)
+            else:
+                first.action()
             delayfunc(0)   # Let other threads run
         
         # return none(int)
