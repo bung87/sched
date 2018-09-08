@@ -2,6 +2,7 @@
 import sched
 import times
 export sched
+import options
  # nim c --threads:on -r src/sched.nim 
 # when isMainModule:
 
@@ -21,12 +22,12 @@ proc print_some_times() =
     discard s.enter(10, 1, print_time,"a")
     discard s.enter(5, 2, print_time,"b")
     
-    var r = s.run()
-    # try:
-    #     echo r.get()
-    #     assert(false)  # This will not be reached
-    # except UnpackError:  # Because an exception is raised
-    #     discard
+    var r = s.run(false)
+    try:
+        echo r.get()
+        assert(false)  # This will not be reached
+    except UnpackError:  # Because an exception is raised
+        discard
     echo epochTime()
 
 print_some_times()
